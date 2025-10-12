@@ -1,0 +1,287 @@
+# This playbook deploys a working Kubernetes cluster using kubeadm on Ubuntu systems.
+# Prerequisites:
+# 1. Target systems are running a clean installation of Ubuntu (20.04 or 22.04).
+# 2. Your Ansible inventory must define 'kube-master', 'kube-workers', and 'kube-nodes' groups.
+---
+
+# ==============================================================================
+# PLAY 1: Install and Configure Prerequisites (All Nodes)
+# ==============================================================================
+- name: Kubeadm Deployment (Master and Workers)
+  hosts: kube-nodes
+  become: yes
+  
+  tasks:
+    - name: disable UFW firewall for labs
+      service:
+          name: ufw
+          state: stopped
+          enabled: false
+
+    - name: Disable SWAP
+      shell: |
+        swapoff -a
+
+    - name: Disable SWAP in fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '^.*swap.*$'
+        line: '#\0'
+        backrefs: yes
+
+    - name: Load br_netfilter module
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Ensure br_netfilter module is persistent
+      lineinfile:
+        path: /etc/modules-load.d/br_netfilter.conf
+        line: br_netfilter
+        create: yes
+
+    - name: ensure net.bridge.bridge-nf-call-ip6tables is set to 1
+      sysctl:
+        name: net.bridge.bridge-nf-call-iptables
+        value: '1'
+        state: present
+        reload: yes
+
+    - name: Installation of apt-utils
+      apt:
+        name: apt-transport-https
+        state: present
+        update_cache: yes
+
+    - name: Adding Docker GPG key
+      ansible.builtin.apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Adding Docker Repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        state: present
+
+    - name: Installation of Docker
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+        - docker-compose
+
+    - name: Configure containerd to use systemd cgroups
+      shell: |
+        rm -f /etc/containerd/config.toml
+        containerd config default | tee /etc/containerd/config.toml > /dev/null
+        sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+        systemctl restart containerd
+        systemctl enable containerd
+
+    - name : Starting Service of Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add Kubernetes APT repository (modern method)
+      block:
+        - name: Install required dependencies
+          apt:
+            name:
+              - apt-transport-https
+              - ca-certificates
+              - curl
+              - gpg
+            state: present
+            update_cache: yes
+
+        - name: Add Kubernetes GPG key
+          shell: |
+            curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+          args:
+            creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+        - name: Add Kubernetes apt repository (v1.29)
+          apt_repository:
+            repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /"
+            state: present
+
+        - name: Update apt cache
+          apt:
+            update_cache: yes
+
+
+    - name: Install kubelet and kubeadm
+      apt:
+          name: "{{ item }}"
+          state: present
+      loop:
+        - kubeadm
+        - kubelet
+
+    - name: start kubelet
+      service:
+        name: kubelet
+        enabled: yes
+        state: started
+
+
+# ==============================================================================
+# PLAY 2: Initialize Master Node
+# ==============================================================================
+- name: 2. Initialize Kubernetes Master Node
+  hosts: kube-master
+  become: yes
+  vars:
+    pod_network_cidr: "10.244.0.0/16"
+  tasks:
+  
+    - name: Initialize the cluster with Kubeadm
+      ansible.builtin.command: >
+        kubeadm init 
+        --pod-network-cidr={{ pod_network_cidr }}
+        --apiserver-advertise-address={{ ansible_default_ipv4.address }}
+        --ignore-preflight-errors=all
+      args:
+        # Prevents re-running init if the cluster is already running
+        creates: /etc/kubernetes/admin.conf
+      register: kubeadm_init_output
+      
+    - name: Configure kubectl for the 'ubuntu' user on the Master
+      ansible.builtin.shell: |
+        mkdir -p $HOME/.kube
+        sudo cp -f /etc/kubernetes/admin.conf $HOME/.kube/config
+        sudo chown $(id -u):$(id -g) $HOME/.kube/config
+      args:
+        executable: /bin/bash
+
+    - name: Install Calico CNI Network Plugin
+      ansible.builtin.shell: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
+      become: no # Run as the ubuntu user with the newly configured kubectl
+      args:
+        removes: /tmp/calico.yaml
+
+    - name: Wait for Kubernetes control plane to become ready
+      ansible.builtin.shell: |
+        until kubectl get nodes >/dev/null 2>&1; do
+          echo "Waiting for API server..."
+          sleep 10
+        done
+      register: wait_output
+      retries: 30
+      delay: 10
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Get Kubeadm Join Command for Workers
+      ansible.builtin.shell: kubeadm token create --print-join-command
+      register: kubeadm_join_command
+      retries: 5
+      delay: 10
+
+      
+    - name: Store Join Command for subsequent plays
+      ansible.builtin.set_fact:
+        join_command: "{{ kubeadm_join_command.stdout }}"
+
+
+# ==============================================================================
+# PLAY 3: Join Worker Nodes to the Cluster
+# ==============================================================================
+- name: 3. Join Worker Nodes to the Cluster
+  hosts: kube-workers
+  become: yes
+  
+  tasks:
+    - name: Execute Kubeadm Join Command
+      # Use the join command retrieved from the master, adding the CRI socket flag.
+      ansible.builtin.command: "{{ hostvars['master-node']['join_command'] }} --cri-socket=unix:///run/containerd/containerd.sock"
+      args:
+        # Prevents joining if the node has already joined
+        creates: /etc/kubernetes/kubelet.conf
+
+# ============================================================================== 
+# PLAY 4: Install kubectl on Bastion Host and configure access
+# ============================================================================== 
+- name: Setup kubectl on bastion
+  hosts: bastion
+  become: yes
+  vars:
+    kube_config_path: "/home/{{ ansible_user }}/.kube/config"
+    master_ip: "10.0.1.244"
+  tasks:
+    - name: Install dependencies
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: yes
+
+    - name: Add Kubernetes GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes apt repository
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /"
+        state: present
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install kubectl
+      apt:
+        name: kubectl
+        state: present
+
+    - name: Create .kube directory
+      file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Copy admin.conf from master
+      fetch:
+        src: /etc/kubernetes/admin.conf
+        dest: /tmp/admin.conf
+        flat: yes
+      delegate_to: master-node
+
+    - name: Move kubeconfig to user's .kube directory
+      copy:
+        src: /tmp/admin.conf
+        dest: "{{ kube_config_path }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+
+    - name: Update kubeconfig to point to master IP
+      replace:
+        path: "{{ kube_config_path }}"
+        regexp: 'server: https://127\.0\.0\.1:6443'
+        replace: "server: https://{{ master_ip }}:6443"
+
+    - name: Test kubectl connection
+      shell: kubectl get nodes
+      environment:
+        KUBECONFIG: "{{ kube_config_path }}"
+      register: kubectl_output
+      retries: 5
+      delay: 10
+      until: kubectl_output.rc == 0
+
+    - name: Show kubectl get nodes output
+      debug:
+        var: kubectl_output.stdout_lines
