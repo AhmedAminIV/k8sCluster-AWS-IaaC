@@ -147,3 +147,6 @@ master-node ansible_host=10.0.1.244 ansible_ssh_common_args=-o StrictHostKeyChec
 * All private keys should be managed securely.
 * Bastion is the only publicly accessible node.
 * Consider Ansible Vault for storing secrets.
+
+## **Structure Notes**
+* If You want to get more details about the strucute You may read [README2.md](README2.md)
