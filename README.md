@@ -17,7 +17,7 @@ This project automates the deployment of a Kubernetes cluster (1 master + 2 work
 ---
 
 ## **Prerequisites**
-
+ [prerequisite.md](prerequisite.md)
 - AWS account with programmatic access (access key + secret key)
 - Terraform installed
 - Ansible >= 2.14
