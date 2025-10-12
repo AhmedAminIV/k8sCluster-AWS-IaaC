@@ -159,11 +159,18 @@
       args:
         executable: /bin/bash
 
-    - name: Install Calico CNI Network Plugin
-      ansible.builtin.shell: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
-      become: no # Run as the ubuntu user with the newly configured kubectl
-      args:
-        removes: /tmp/calico.yaml
+    - name: Download Calico manifest
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
+        dest: /tmp/calico.yaml
+        mode: '0644'
+      become: no
+
+    - name: Apply Calico CNI Plugin
+      ansible.builtin.command: kubectl apply -f /tmp/calico.yaml
+      become: no
+      environment:
+        KUBECONFIG: "/home/ubuntu/.kube/config"
 
     - name: Wait for Kubernetes control plane to become ready
       ansible.builtin.shell: |
