@@ -159,19 +159,6 @@
       args:
         executable: /bin/bash
 
-    - name: Download Calico manifest
-      ansible.builtin.get_url:
-        url: https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
-        dest: /tmp/calico.yaml
-        mode: '0644'
-      become: no
-
-    - name: Apply Calico CNI Plugin
-      ansible.builtin.command: kubectl apply -f /tmp/calico.yaml
-      become: no
-      environment:
-        KUBECONFIG: "/home/ubuntu/.kube/config"
-
     - name: Wait for Kubernetes control plane to become ready
       ansible.builtin.shell: |
         until kubectl get nodes >/dev/null 2>&1; do
@@ -194,6 +181,37 @@
     - name: Store Join Command for subsequent plays
       ansible.builtin.set_fact:
         join_command: "{{ kubeadm_join_command.stdout }}"
+
+    - name: Configure kubectl for root (default after kubeadm init)
+      ansible.builtin.shell: |
+        mkdir -p /root/.kube
+        cp -f /etc/kubernetes/admin.conf /root/.kube/config
+      args:
+        executable: /bin/bash
+
+    - name: Copy kubeconfig for ubuntu user
+      ansible.builtin.shell: |
+        mkdir -p /home/ubuntu/.kube
+        cp -f /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
+        chown ubuntu:ubuntu /home/ubuntu/.kube/config
+      args:
+        executable: /bin/bash
+
+
+    - name: Download Calico manifest
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
+        dest: /tmp/calico.yaml
+        mode: '0644'
+      become: no
+
+    - name: Apply Calico CNI Plugin
+      ansible.builtin.command: >
+        kubectl apply -f /tmp/calico.yaml
+        --kubeconfig=/home/ubuntu/.kube/config
+        --validate=false
+      become: no
+
 
 
 # ==============================================================================
