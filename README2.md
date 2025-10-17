@@ -3,6 +3,30 @@
 ## Section I: Executive Summary and Deployment Architecture
 
 This project establishes a resilient and secure Kubernetes cluster on the Amazon Web Services (AWS) cloud platform. The deployment adheres to the Infrastructure as Code (IaC) paradigm, utilizing **Terraform** for resource provisioning and **Ansible** for declarative configuration management. The workflow is designed for immutability, auditability, and minimal human intervention, progressing from raw infrastructure definition to application-ready Kubernetes nodes.
+**Infrastructure Setup (Terraform):**
+
+* **VPC Design:** Created a custom VPC with an Internet Gateway, NAT Gateway, and proper routing.
+* **Subnets:** Configured one public subnet (for the Bastion host and NAT Gateway) and three private subnets across different Availability Zones for better resilience.
+* **Instances:**
+
+  * **Bastion Host:** Ubuntu-based `t2.micro` instance for secure SSH access.
+  * **Master Node:** `t3.medium` instance hosting the Kubernetes control plane.
+  * **Worker Nodes:** Two `t3.small` instances, each in a different private subnet.
+* **Security Groups:**
+
+  * Bastion SG allows SSH access from anywhere (IPv4).
+  * Master and Worker SGs allow only internal communication and SSH access from the Bastion host.
+* **Key Management:** Generated an RSA TLS private key using Terraform, pushed the public key to all instances, and stored the private key securely in the project directory.
+* **Dynamic Inventory:** Used Terraform to render an Ansible dynamic inventory template automatically after instance IPs were created.
+
+**Configuration & Orchestration (Ansible):**
+
+* Used Ansible to configure all nodes and set up Kubernetes with **kubeadm**.
+* Automated the deployment of Kubernetes control plane and worker node joining.
+* Configured `kubectl` on the Bastion host to manage the cluster remotely.
+
+This project demonstrates the full integration of **Infrastructure as Code (IaC)** and **Configuration Management** tools to create a scalable, secure, and production-ready Kubernetes environment.
+
 
 ## Section II: Infrastructure Provisioning (Terraform Responsibilities)
 
@@ -94,4 +118,5 @@ ssh -i ./cluster_key.pem ubuntu@<BASTION_PUBLIC_IP>
 kubectl get nodes
 ```  
 >   You should see `master-node` and two `worker-node`s in the `Ready` state.
+
 
