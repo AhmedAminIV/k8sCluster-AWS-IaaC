@@ -8,6 +8,7 @@ This project automates the deployment of a Kubernetes cluster (1 master + 2 work
 ---
 
 ## **Architecture**
+![Architecture Diagram](./architecture.svg)
 
 - **Bastion Host**: Publicly accessible, used for SSH into internal nodes.
 - **Master Node**: Kubernetes control plane.
