@@ -127,14 +127,6 @@ master-node ansible_host=10.0.1.244 ansible_ssh_common_args=-o StrictHostKeyChec
 
 ---
 
-## **Tips**
-
-* Do **not commit `cluster_key.pem`** — add it to `.gitignore`.
-* For first-time runs, **ensure `host_key_checking = False`** in `ansible.cfg`.
-* Nodes are deployed in separate AZs — adjust Terraform if you want different network topology.
-
----
-
 ## **Troubleshooting**
 
 * **SSH fails first time**: Ensure `ansible.cfg` and `ansible_ssh_common_args` have StrictHostKeyChecking disabled.
